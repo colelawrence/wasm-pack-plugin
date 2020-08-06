@@ -23,6 +23,7 @@ class WasmPackPlugin {
     this.crateDirectory = options.crateDirectory
     this.forceWatch = options.forceWatch
     this.forceMode = options.forceMode
+    this.cancelPreviousCompilation = () => {}
     this.args = (options.args || "--verbose")
       .trim()
       .split(" ")
@@ -126,9 +127,9 @@ class WasmPackPlugin {
       info("ℹ️  Installing wasm-pack \n")
 
       if (commandExistsSync("npm")) {
-        return runProcess("npm", ["install", "-g", "wasm-pack"], {})
+        return runProcess("npm", ["install", "-g", "wasm-pack"], {}).done
       } else if (commandExistsSync("yarn")) {
-        return runProcess("yarn", ["global", "add", "wasm-pack"], {})
+        return runProcess("yarn", ["global", "add", "wasm-pack"], {}).done
       } else {
         error("⚠️ could not install wasm-pack, you must have yarn or npm installed")
       }
@@ -143,6 +144,7 @@ class WasmPackPlugin {
    */
   _compile(watching, reason) {
     info(`ℹ️  Compiling your crate in ${this.isDebug ? "development" : "release"} mode... (${reason})\n`)
+    this.cancelPreviousCompilation()
 
     return fs.promises
       .stat(this.crateDirectory)
@@ -152,7 +154,7 @@ class WasmPackPlugin {
         }
       })
       .then(() => {
-        return spawnWasmPack({
+        const { done, cancel } = spawnWasmPack({
           outDir: this.outDir,
           outName: this.outName,
           isDebug: this.isDebug,
@@ -160,6 +162,11 @@ class WasmPackPlugin {
           args: this.args,
           extraArgs: this.extraArgs,
         })
+
+        this.cancelPreviousCompilation()
+        this.cancelPreviousCompilation = cancel
+
+        return done
       })
       .then((detail) => {
         // This clears out the error when the compilation succeeds.
@@ -206,20 +213,31 @@ function spawnWasmPack({ outDir, outName, isDebug, cwd, args, extraArgs }) {
   return runProcess(bin, allArgs, options)
 }
 
+/** @returns {{ done: Promise<any>, cancel: () => void }} */
 function runProcess(bin, args, options) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(bin, args, options)
-
-    p.on("close", (code) => {
-      if (code === 0) {
-        resolve()
-      } else {
-        reject(new Error("Rust compilation."))
+  const p = spawn(bin, args, options)
+  let killed = false
+  return {
+    cancel() {
+      if (!killed && p.connected) {
+        killed = true
+        p.kill("SIGINT")
       }
-    })
+    },
+    done: new Promise((resolve, reject) => {
+      p.on("close", (code) => {
+        if (code === 0) {
+          resolve()
+        } else if (killed) {
+          reject(new Error("Rust compilation canceled."))
+        } else {
+          reject(new Error("Rust compilation."))
+        }
+      })
 
-    p.on("error", reject)
-  })
+      p.on("error", reject)
+    }),
+  }
 }
 
 module.exports = WasmPackPlugin
