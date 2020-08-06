@@ -39,7 +39,9 @@ class WasmPackPlugin {
       info = () => {};
     }
 
-    this.wp = new Watchpack();
+    this.wp = new Watchpack({
+      aggregateTimeout: 1000,
+    });
     this.isDebug = true;
     this.error = null;
   }
@@ -66,7 +68,7 @@ class WasmPackPlugin {
           if (shouldWatch) {
             this.wp.watch(this.watchFiles, this.watchDirectories, Date.now() - 10000);
 
-            this.wp.on('change', () => {
+            this.wp.on('aggregated', () => {
               this._compile(true);
             });
           }
@@ -105,6 +107,7 @@ class WasmPackPlugin {
     fs.writeFileSync(path.join(this.outDir, this.outName + ".js"), "");
   }
 
+  /** @returns {Promise<void>} */
   _checkWasmPack() {
     info('🧐  Checking for wasm-pack...\n');
 
