@@ -1,16 +1,15 @@
-const {
-  spawn
-} = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const commandExistsSync = require('command-exists').sync;
-const chalk = require('chalk');
-const Watchpack = require('watchpack');
+// @ts-check
+const { spawn } = require("child_process")
+const fs = require("fs")
+const path = require("path")
+const commandExistsSync = require("command-exists").sync
+const chalk = require("chalk")
+const Watchpack = require("watchpack")
 
-const error = msg => console.error(chalk.bold.red(msg));
-let info = msg => console.log(chalk.bold.blue(msg));
+const error = (msg) => console.error(chalk.bold.red(msg))
+let info = (msg, ...args) => console.log(chalk.bold.blue(msg), ...args)
 // https://github.com/wasm-tool/wasm-pack-plugin/issues/58
-const wasmPackPath = process.env["WASM_PACK_PATH"];
+const wasmPackPath = process.env["WASM_PACK_PATH"]
 
 class WasmPackPlugin {
   constructor(options) {
@@ -20,202 +19,207 @@ class WasmPackPlugin {
      *
      * See https://github.com/wasm-tool/wasm-pack-plugin/issues/15
      */
-    this._ranInitialCompilation = false;
-    this.crateDirectory = options.crateDirectory;
-    this.forceWatch = options.forceWatch;
-    this.forceMode = options.forceMode;
-    this.args = (options.args || '--verbose').trim().split(' ').filter(x => x);
-    this.extraArgs = (options.extraArgs || '').trim().split(' ').filter(x => x);
-    this.outDir = options.outDir || "pkg";
-    this.outName = options.outName || "index";
-    this.watchDirectories = (options.watchDirectories || [])
-      .concat(path.resolve(this.crateDirectory, 'src'));
-    this.watchFiles = [path.resolve(this.crateDirectory, 'Cargo.toml')];
+    this._ranInitialCompilation = false
+    this.crateDirectory = options.crateDirectory
+    this.forceWatch = options.forceWatch
+    this.forceMode = options.forceMode
+    this.args = (options.args || "--verbose")
+      .trim()
+      .split(" ")
+      .filter((x) => x)
+    this.extraArgs = (options.extraArgs || "")
+      .trim()
+      .split(" ")
+      .filter((x) => x)
+    this.outDir = options.outDir || "pkg"
+    this.outName = options.outName || "index"
+    this.watchDirectories = (options.watchDirectories || []).concat(path.resolve(this.crateDirectory, "src"))
+    this.watchFiles = [path.resolve(this.crateDirectory, "Cargo.toml")]
 
-    if (options.pluginLogLevel && options.pluginLogLevel !== 'info') {
+    if (options.pluginLogLevel && options.pluginLogLevel !== "info") {
       // The default value for pluginLogLevel is 'info'. If specified and it's
       // not 'info', don't log informational messages. If unspecified or 'info',
       // log as per usual.
-      info = () => {};
+      info = () => {}
     }
 
     this.wp = new Watchpack({
       aggregateTimeout: 1000,
-    });
-    this.isDebug = true;
-    this.error = null;
+    })
+    this.isDebug = true
+    this.error = null
   }
 
   apply(compiler) {
-    this.isDebug = this.forceMode ? this.forceMode === "development" : compiler.options.mode === "development";
+    this.isDebug = this.forceMode ? this.forceMode === "development" : compiler.options.mode === "development"
 
     // This fixes an error in Webpack where it cannot find
     // the `pkg/index.js` file if Rust compilation errors.
-    this._makeEmpty();
+    this._makeEmpty()
 
     // force first compilation
-    compiler.hooks.beforeCompile.tapPromise('WasmPackPlugin', () => {
+    compiler.hooks.beforeCompile.tapPromise("WasmPackPlugin", () => {
       if (this._ranInitialCompilation === true) {
-        return Promise.resolve();
+        return Promise.resolve()
       }
 
-      this._ranInitialCompilation = true;
+      this._ranInitialCompilation = true
 
-      return this._checkWasmPack()
-        .then(() => {
-          const shouldWatch = this.forceWatch || (this.forceWatch === undefined && compiler.watchMode);
+      return this._checkWasmPack().then(() => {
+        const shouldWatch = this.forceWatch || (this.forceWatch === undefined && compiler.watchMode)
 
-          if (shouldWatch) {
-            this.wp.watch(this.watchFiles, this.watchDirectories, Date.now() - 10000);
+        if (shouldWatch) {
+          info("Start watching", this.watchFiles, this.watchDirectories)
 
-            this.wp.on('aggregated', () => {
-              this._compile(true);
-            });
-          }
+          this.wp.watch(this.watchFiles, this.watchDirectories, Date.now() - 10000)
 
-          return this._compile(false);
-        });
-    });
+          this.wp.on("aggregated", (changes) => {
+            this._compile(true, `Aggregated change ${JSON.stringify(Array.from(changes))}`)
+          })
+        }
 
-    let first = true;
+        return this._compile(false, "Initial compilation")
+      })
+    })
 
-    compiler.hooks.thisCompilation.tap('WasmPackPlugin', (compilation) => {
+    let first = true
+
+    compiler.hooks.thisCompilation.tap("WasmPackPlugin", (compilation) => {
       // Super hacky, needed to workaround a bug in Webpack which causes
       // thisCompilation to be triggered twice on the first compilation.
       if (first) {
-        first = false;
-
+        first = false
       } else {
         // This is needed in order to gracefully handle errors in Webpack,
         // since Webpack has its own custom error system.
         if (this.error != null) {
-          compilation.errors.push(this.error);
+          compilation.errors.push(this.error)
         }
       }
-    });
+    })
   }
 
   _makeEmpty() {
     try {
-      fs.mkdirSync(this.outDir);
+      fs.mkdirSync(this.outDir)
     } catch (e) {
       if (e.code !== "EEXIST") {
-        throw e;
+        throw e
       }
     }
 
-    fs.writeFileSync(path.join(this.outDir, this.outName + ".js"), "");
+    fs.writeFileSync(path.join(this.outDir, this.outName + ".js"), "")
   }
 
   /** @returns {Promise<void>} */
   _checkWasmPack() {
-    info('🧐  Checking for wasm-pack...\n');
+    info("🧐  Checking for wasm-pack...\n")
 
     if (wasmPackPath !== undefined) {
-      info('✅  wasm-pack is installed; managed by another tool. \n');
-      return Promise.resolve();
-    } else if (commandExistsSync('wasm-pack')) {
-      info('✅  wasm-pack is installed. \n');
+      info("✅  wasm-pack is installed; managed by another tool. \n")
+      return Promise.resolve()
+    } else if (commandExistsSync("wasm-pack")) {
+      info("✅  wasm-pack is installed. \n")
 
-      return Promise.resolve();
+      return Promise.resolve()
     } else {
-      info('ℹ️  Installing wasm-pack \n');
+      info("ℹ️  Installing wasm-pack \n")
 
       if (commandExistsSync("npm")) {
-        return runProcess("npm", ["install", "-g", "wasm-pack"], {});
+        return runProcess("npm", ["install", "-g", "wasm-pack"], {})
       } else if (commandExistsSync("yarn")) {
-        return runProcess("yarn", ["global", "add", "wasm-pack"], {});
+        return runProcess("yarn", ["global", "add", "wasm-pack"], {})
       } else {
-        error(
-          "⚠️ could not install wasm-pack, you must have yarn or npm installed"
-        );
+        error("⚠️ could not install wasm-pack, you must have yarn or npm installed")
       }
 
-      return Promise.reject();
+      return Promise.reject()
     }
   }
 
-  _compile(watching) {
-    info(`ℹ️  Compiling your crate in ${this.isDebug ? 'development' : 'release'} mode...\n`);
+  /**
+   * @param {boolean} watching
+   * @param {string} reason for causing re-compilation
+   */
+  _compile(watching, reason) {
+    info(`ℹ️  Compiling your crate in ${this.isDebug ? "development" : "release"} mode... (${reason})\n`)
 
-    return fs.promises.stat(this.crateDirectory).then(stats => {
-      if (!stats.isDirectory()) {
-        throw new Error(`${this.crateDirectory} is not a directory`);
-      }
-    }).then(() => {
-      return spawnWasmPack({
-        outDir: this.outDir,
-        outName: this.outName,
-        isDebug: this.isDebug,
-        cwd: this.crateDirectory,
-        args: this.args,
-        extraArgs: this.extraArgs,
-      });
-    }).then((detail) => {
-      // This clears out the error when the compilation succeeds.
-      this.error = null;
+    return fs.promises
+      .stat(this.crateDirectory)
+      .then((stats) => {
+        if (!stats.isDirectory()) {
+          throw new Error(`${this.crateDirectory} is not a directory`)
+        }
+      })
+      .then(() => {
+        return spawnWasmPack({
+          outDir: this.outDir,
+          outName: this.outName,
+          isDebug: this.isDebug,
+          cwd: this.crateDirectory,
+          args: this.args,
+          extraArgs: this.extraArgs,
+        })
+      })
+      .then((detail) => {
+        // This clears out the error when the compilation succeeds.
+        this.error = null
 
-      if (detail) {
-        info(detail);
-      }
+        if (detail) {
+          info(detail)
+        }
 
-      info('✅  Your crate has been correctly compiled\n');
-    })
-    .catch((e) => {
-      // Webpack has a custom error system, so we cannot return an
-      // error directly, instead we need to trigger it later.
-      this.error = e;
+        info("✅  Your crate has been correctly compiled\n")
+      })
+      .catch((e) => {
+        // Webpack has a custom error system, so we cannot return an
+        // error directly, instead we need to trigger it later.
+        this.error = e
 
-      if (watching) {
-        // This is to trigger a recompilation so it displays the error message
-        this._makeEmpty();
-      }
-    });
+        if (watching) {
+          // This is to trigger a recompilation so it displays the error message
+          this._makeEmpty()
+        }
+      })
   }
 }
 
-function spawnWasmPack({
-  outDir,
-  outName,
-  isDebug,
-  cwd,
-  args,
-  extraArgs
-}) {
-  const bin = wasmPackPath || 'wasm-pack';
+function spawnWasmPack({ outDir, outName, isDebug, cwd, args, extraArgs }) {
+  const bin = wasmPackPath || "wasm-pack"
 
   const allArgs = [
     ...args,
-    'build',
-    '--out-dir', outDir,
-    '--out-name', outName,
-    ...(isDebug ? ['--dev'] : []),
-    ...extraArgs
-  ];
+    "build",
+    "--out-dir",
+    outDir,
+    "--out-name",
+    outName,
+    ...(isDebug ? ["--dev"] : []),
+    ...extraArgs,
+  ]
 
   const options = {
     cwd,
-    stdio: "inherit"
-  };
+    stdio: "inherit",
+  }
 
-  return runProcess(bin, allArgs, options);
+  return runProcess(bin, allArgs, options)
 }
 
 function runProcess(bin, args, options) {
   return new Promise((resolve, reject) => {
-    const p = spawn(bin, args, options);
+    const p = spawn(bin, args, options)
 
-    p.on('close', code => {
+    p.on("close", (code) => {
       if (code === 0) {
-        resolve();
-
+        resolve()
       } else {
-        reject(new Error("Rust compilation."));
+        reject(new Error("Rust compilation."))
       }
-    });
+    })
 
-    p.on('error', reject);
-  });
+    p.on("error", reject)
+  })
 }
 
-module.exports = WasmPackPlugin;
+module.exports = WasmPackPlugin
